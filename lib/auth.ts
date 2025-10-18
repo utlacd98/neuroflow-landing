@@ -28,11 +28,13 @@ export interface UserProfile {
 
 // In-memory user storage (replace with database in production)
 const users: Map<string, User> = new Map();
+let adminAccountsInitialized = false;
 
 // Initialize hardcoded admin accounts
 async function initializeAdminAccounts() {
   // Only initialize if not already done
-  if (users.size > 0) return;
+  if (adminAccountsInitialized) return;
+  adminAccountsInitialized = true;
 
   const adminAccounts = [
     {
@@ -56,9 +58,13 @@ async function initializeAdminAccounts() {
   ];
 
   for (const account of adminAccounts) {
+    // Check if user already exists
+    const existingUser = Array.from(users.values()).find(u => u.email === account.email);
+    if (existingUser) continue;
+
     const passwordHash = await hashPassword(account.password);
     const user: User = {
-      id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: `user_${account.email.split('@')[0]}_${Date.now()}`,
       email: account.email,
       name: account.name,
       passwordHash,

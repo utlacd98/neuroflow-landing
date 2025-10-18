@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createUser } from '@/lib/auth';
+import { createUser, loadUsersFromStorage } from '@/lib/auth';
 import { checkRateLimit, validateEmail, validatePasswordStrength, getClientIP, generateSessionToken } from '@/lib/ddosProtection';
 
 export async function POST(request: NextRequest) {
   try {
+    // Initialize admin accounts on every request (for serverless)
+    await loadUsersFromStorage();
+
     const clientIP = getClientIP(request.headers as any);
     
     // Check rate limit
