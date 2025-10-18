@@ -91,16 +91,28 @@ export default function FocusyncDashboard() {
   useEffect(() => {
     const detectCamera = async () => {
       try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const hasCamera = devices.some((device) => device.kind === 'videoinput');
-        setCameraActive(hasCamera);
-
-        // Update frequency based on camera availability
-        if (hasCamera) {
-          setFrequency(40); // Gamma waves for peak focus
+        // First check if mediaDevices is available
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+          console.log('MediaDevices API not available');
+          return;
         }
+
+        // Try to get camera permission
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user' },
+          audio: false
+        });
+
+        // If we got here, camera is available
+        setCameraActive(true);
+        setFrequency(40); // Gamma waves for peak focus
+
+        // Stop the stream immediately
+        stream.getTracks().forEach(track => track.stop());
       } catch (error) {
-        console.log('Camera detection not available');
+        // Camera not available or permission denied - that's ok
+        console.log('Camera not available or permission denied');
+        setCameraActive(false);
       }
     };
 
