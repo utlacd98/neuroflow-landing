@@ -19,6 +19,7 @@ import { playlistLibrary, type Playlist } from '@/lib/playlistLibrary';
 import { cameraMotionDetector, type MotionData } from '@/lib/cameraMotionDetector';
 import { advancedFocusDetector, type FocusMetrics } from '@/lib/advancedFocusDetector';
 import { adaptiveFrequencyModulator } from '@/lib/adaptiveFrequencyModulator';
+import { adaptiveRecoveryMode, type RecoveryState } from '@/lib/adaptiveRecoveryMode';
 
 interface ChartDataPoint {
   time: string;
@@ -56,6 +57,7 @@ export default function FocusyncDashboard() {
   const [showPlaylistSelector, setShowPlaylistSelector] = useState(false);
   const [focusMetrics, setFocusMetrics] = useState<FocusMetrics | null>(null);
   const [advancedCameraActive, setAdvancedCameraActive] = useState(false);
+  const [recoveryState, setRecoveryState] = useState<RecoveryState | null>(null);
 
   // Initialize chart data
   useEffect(() => {
@@ -115,12 +117,23 @@ export default function FocusyncDashboard() {
           advancedFocusDetector.onFocusMetricsChange((metrics: FocusMetrics) => {
             setFocusMetrics(metrics);
 
-            // Update frequency based on focus score
-            setFrequency(10 + (metrics.focusScore / 100) * 30); // 10-40 Hz
+            // Update recovery mode
+            const recovery = adaptiveRecoveryMode.updateFocusScore(metrics.focusScore);
+            setRecoveryState(recovery);
+
+            // Determine target frequency (recovery mode or normal)
+            let targetFrequency = 10 + (metrics.focusScore / 100) * 30; // 10-40 Hz
+            if (recovery.isActive) {
+              targetFrequency = recovery.targetFrequency;
+            }
+
+            setFrequency(targetFrequency);
 
             // Update adaptive audio
             if (isPlaying) {
-              adaptiveFrequencyModulator.updateFrequency(metrics.focusScore, volume);
+              // Use recovery frequency if active, otherwise use focus score
+              const audioFrequency = recovery.isActive ? recovery.targetFrequency : metrics.focusScore;
+              adaptiveFrequencyModulator.updateFrequency(audioFrequency, volume);
             }
 
             // Update focus level
@@ -128,6 +141,11 @@ export default function FocusyncDashboard() {
               ...prev,
               focusLevel: metrics.focusScore / 100,
             }));
+          });
+
+          // Listen for recovery mode changes
+          adaptiveRecoveryMode.onRecoveryStateChange((recovery: RecoveryState) => {
+            setRecoveryState(recovery);
           });
         } else {
           setAdvancedCameraActive(false);
@@ -401,6 +419,39 @@ export default function FocusyncDashboard() {
         {isPlaying && advancedCameraActive && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="mb-8">
             <AdvancedFocusMonitor metrics={focusMetrics} isActive={advancedCameraActive} />
+          </motion.div>
+        )}
+
+        {/* Recovery Mode Indicator */}
+        {isPlaying && recoveryState && recoveryState.isActive && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="mb-8"
+          >
+            <Card className="p-6 bg-gradient-to-r from-blue-900/40 to-indigo-900/40 border-2 border-blue-500/50">
+              <div className="flex items-center gap-4">
+                <motion.div
+                  animate={{ scale: [1, 1.1, 1] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                  className="text-4xl"
+                >
+                  🧘
+                </motion.div>
+                <div className="flex-1">
+                  <p className="text-lg font-semibold text-blue-300 mb-2">Recovery Mode Active</p>
+                  <p className="text-sm text-blue-200 mb-3">{recoveryState.message}</p>
+                  <div className="w-full bg-blue-900/50 rounded-full h-2 overflow-hidden">
+                    <motion.div
+                      className="h-full bg-gradient-to-r from-blue-400 to-indigo-400"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${recoveryState.recoveryIntensity * 100}%` }}
+                      transition={{ duration: 0.5 }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </Card>
           </motion.div>
         )}
 

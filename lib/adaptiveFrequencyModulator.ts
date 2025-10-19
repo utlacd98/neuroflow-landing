@@ -31,19 +31,39 @@ export class AdaptiveFrequencyModulator {
   private oscillators: OscillatorNode[] = [];
   private gainNodes: GainNode[] = [];
   private masterGain: GainNode | null = null;
+  private lowPassFilter: BiquadFilterNode | null = null;
+  private noiseGate: GainNode | null = null;
   private isPlaying = false;
   private currentState: BrainwaveState | null = null;
-  private transitionDuration = 0.5; // seconds
+  private transitionDuration = 0.8; // seconds - smoother transitions
+  private lastFrequency = 0;
+  private frequencyUpdateThreshold = 0.5; // Only update if frequency changes by >0.5 Hz
+  private lastUpdateTime = 0;
+  private minUpdateInterval = 100; // ms between updates
 
   async initialize(): Promise<boolean> {
     try {
       // Create audio context
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
+      // Create noise gate (prevents static noise)
+      this.noiseGate = this.audioContext.createGain();
+      this.noiseGate.gain.value = 0; // Start silent
+
+      // Create low-pass filter (removes high-frequency noise)
+      this.lowPassFilter = this.audioContext.createBiquadFilter();
+      this.lowPassFilter.type = 'lowpass';
+      this.lowPassFilter.frequency.value = 200; // Cut off above 200 Hz
+      this.lowPassFilter.Q.value = 1; // Gentle slope
+
       // Create master gain
       this.masterGain = this.audioContext.createGain();
+      this.masterGain.gain.value = 0.25; // Reduced from 0.3 to prevent clipping
+
+      // Connect chain: noiseGate → lowPassFilter → masterGain → destination
+      this.noiseGate.connect(this.lowPassFilter);
+      this.lowPassFilter.connect(this.masterGain);
       this.masterGain.connect(this.audioContext.destination);
-      this.masterGain.gain.value = 0.3; // Safe default volume
 
       return true;
     } catch (error) {
@@ -97,12 +117,27 @@ export class AdaptiveFrequencyModulator {
   }
 
   /**
-   * Update audio based on focus score
+   * Update audio based on focus score with debouncing
    */
-  updateFrequency(focusScore: number, volume: number = 0.3) {
+  updateFrequency(focusScore: number, volume: number = 0.25) {
     if (!this.audioContext || !this.masterGain) return;
 
+    const now = Date.now();
+
+    // Debounce: only update if enough time has passed
+    if (now - this.lastUpdateTime < this.minUpdateInterval) {
+      return;
+    }
+
     const newState = this.mapFocusScoreToBrainwave(focusScore);
+
+    // Only update if frequency changed significantly
+    if (Math.abs(newState.frequency - this.lastFrequency) < this.frequencyUpdateThreshold) {
+      return;
+    }
+
+    this.lastFrequency = newState.frequency;
+    this.lastUpdateTime = now;
 
     // Smooth transition
     if (this.currentState) {
@@ -115,49 +150,58 @@ export class AdaptiveFrequencyModulator {
   }
 
   /**
-   * Create oscillators for the current state
+   * Create oscillators for the current state with smooth gain ramping
    */
   private createOscillators(state: BrainwaveState, volume: number) {
-    if (!this.audioContext || !this.masterGain) return;
+    if (!this.audioContext || !this.masterGain || !this.noiseGate) return;
 
     // Stop existing oscillators
     this.stopOscillators();
 
+    const now = this.audioContext.currentTime;
+    const rampTime = 0.1; // 100ms ramp-in
+
     // Create base frequency oscillator
     const osc1 = this.audioContext.createOscillator();
     osc1.type = 'sine';
-    osc1.frequency.value = state.frequency;
+    osc1.frequency.setValueAtTime(state.frequency, now);
 
     const gain1 = this.audioContext.createGain();
-    gain1.gain.value = volume * state.intensity * 0.6;
+    gain1.gain.setValueAtTime(0, now); // Start at 0
+    gain1.gain.linearRampToValueAtTime(volume * state.intensity * 0.6, now + rampTime);
 
     osc1.connect(gain1);
-    gain1.connect(this.masterGain);
+    gain1.connect(this.noiseGate);
     osc1.start();
 
     // Create binaural beat oscillator (right channel simulation)
     const osc2 = this.audioContext.createOscillator();
     osc2.type = 'sine';
-    osc2.frequency.value = state.frequency + state.beatFrequency;
+    osc2.frequency.setValueAtTime(state.frequency + state.beatFrequency, now);
 
     const gain2 = this.audioContext.createGain();
-    gain2.gain.value = volume * state.intensity * 0.4;
+    gain2.gain.setValueAtTime(0, now);
+    gain2.gain.linearRampToValueAtTime(volume * state.intensity * 0.4, now + rampTime);
 
     osc2.connect(gain2);
-    gain2.connect(this.masterGain);
+    gain2.connect(this.noiseGate);
     osc2.start();
 
     // Create harmonic (adds richness)
     const osc3 = this.audioContext.createOscillator();
     osc3.type = 'sine';
-    osc3.frequency.value = state.frequency * 2; // Octave up
+    osc3.frequency.setValueAtTime(state.frequency * 2, now); // Octave up
 
     const gain3 = this.audioContext.createGain();
-    gain3.gain.value = volume * state.intensity * 0.2;
+    gain3.gain.setValueAtTime(0, now);
+    gain3.gain.linearRampToValueAtTime(volume * state.intensity * 0.2, now + rampTime);
 
     osc3.connect(gain3);
-    gain3.connect(this.masterGain);
+    gain3.connect(this.noiseGate);
     osc3.start();
+
+    // Enable noise gate
+    this.noiseGate.gain.setValueAtTime(1, now);
 
     this.oscillators = [osc1, osc2, osc3];
     this.gainNodes = [gain1, gain2, gain3];
@@ -165,20 +209,27 @@ export class AdaptiveFrequencyModulator {
   }
 
   /**
-   * Smooth transition between states
+   * Smooth transition between states with exponential ramping
    */
   private transitionToState(newState: BrainwaveState, volume: number) {
-    if (!this.audioContext || !this.masterGain) return;
+    if (!this.audioContext || !this.masterGain || !this.noiseGate) return;
+
+    const now = this.audioContext.currentTime;
+    const fadeOutTime = this.transitionDuration * 0.7; // 70% of transition for fade out
+    const fadeInTime = this.transitionDuration * 0.3; // 30% of transition for fade in
 
     // Fade out current oscillators
     this.gainNodes.forEach((gain) => {
-      gain.gain.linearRampToValueAtTime(0, this.audioContext!.currentTime + this.transitionDuration);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + fadeOutTime);
     });
+
+    // Disable noise gate during transition
+    this.noiseGate.gain.linearRampToValueAtTime(0, now + fadeOutTime);
 
     // Schedule new oscillators after fade
     setTimeout(() => {
       this.createOscillators(newState, volume);
-    }, this.transitionDuration * 1000);
+    }, fadeOutTime * 1000);
   }
 
   /**
@@ -214,14 +265,27 @@ export class AdaptiveFrequencyModulator {
   }
 
   /**
-   * Stop audio
+   * Stop audio with proper cleanup
    */
   stop() {
-    this.stopOscillators();
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
+    if (this.audioContext && this.noiseGate) {
+      const now = this.audioContext.currentTime;
+      // Fade out noise gate
+      this.noiseGate.gain.linearRampToValueAtTime(0, now + 0.2);
     }
+
+    // Stop oscillators after fade
+    setTimeout(() => {
+      this.stopOscillators();
+    }, 200);
+
+    // Close audio context after cleanup
+    setTimeout(() => {
+      if (this.audioContext && this.audioContext.state !== 'closed') {
+        this.audioContext.close();
+        this.audioContext = null;
+      }
+    }, 300);
   }
 
   /**

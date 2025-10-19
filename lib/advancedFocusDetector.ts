@@ -27,20 +27,35 @@ export class AdvancedFocusDetector {
   private listeners: ((metrics: FocusMetrics) => void)[] = [];
   private animationFrameId: number | null = null;
 
-  // Blink detection
-  private blinkThreshold = 0.15;
+  // Improved blink detection
+  private blinkThreshold = 0.2; // Increased sensitivity
+  private eyeClosureFrames = 0; // Track consecutive closed frames
+  private minBlinkFrames = 2; // Minimum frames for valid blink
+  private maxBlinkFrames = 15; // Maximum frames for valid blink
   private lastBlinkTime = 0;
   private blinkCount = 0;
   private blinkWindow = 60000; // 1 minute
+  private blinkCooldown = 200; // ms between blinks
+  private eyeOpenHistory: number[] = [];
 
-  // Smoothing
+  // Exponential smoothing
+  private smoothedFocusScore = 50;
+  private smoothingFactor = 0.15; // 0-1, lower = more smoothing
   private focusScoreHistory: number[] = [];
-  private maxHistoryLength = 10;
+  private maxHistoryLength = 5; // Reduced for faster response
 
   // Head position tracking
   private lastHeadX = 0;
   private lastHeadY = 0;
   private headMovementSum = 0;
+  private headMovementHistory: number[] = [];
+  private maxHeadHistoryLength = 10;
+
+  // Performance optimization
+  private frameCount = 0;
+  private analysisInterval = 2; // Analyze every 2nd frame (30 FPS → 15 FPS analysis)
+  private cachedFaceRegion: { x: number; y: number; width: number; height: number } | null = null;
+  private faceRegionUpdateInterval = 10; // Update face region every 10 frames
 
   async initialize(): Promise<boolean> {
     try {
@@ -103,11 +118,16 @@ export class AdvancedFocusDetector {
         this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
         const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
 
-        // Analyze facial features
-        const metrics = this.analyzeFacialFeatures(imageData);
+        // Analyze every Nth frame for performance
+        if (this.frameCount % this.analysisInterval === 0) {
+          // Analyze facial features
+          const metrics = this.analyzeFacialFeatures(imageData);
 
-        // Notify listeners
-        this.notifyListeners(metrics);
+          // Notify listeners
+          this.notifyListeners(metrics);
+        }
+
+        this.frameCount++;
       } catch (error) {
         console.error('Focus analysis error:', error);
       }
@@ -123,11 +143,24 @@ export class AdvancedFocusDetector {
     const width = this.canvas!.width;
     const height = this.canvas!.height;
 
-    // Detect face region (simplified - looks for skin tone)
-    const faceRegion = this.detectFaceRegion(data, width, height);
+    // Update face region periodically (cache for performance)
+    if (this.frameCount % this.faceRegionUpdateInterval === 0) {
+      this.cachedFaceRegion = this.detectFaceRegion(data, width, height);
+    }
+
+    const faceRegion = this.cachedFaceRegion || this.detectFaceRegion(data, width, height);
 
     // Detect eyes (dark regions in face)
     const eyeMetrics = this.detectEyeMetrics(data, width, height, faceRegion);
+
+    // Track eye openness for blink detection
+    this.eyeOpenHistory.push(eyeMetrics.eyeOpenness);
+    if (this.eyeOpenHistory.length > 30) {
+      this.eyeOpenHistory.shift();
+    }
+
+    // Detect blinks
+    this.detectBlinks(eyeMetrics.eyeOpenness);
 
     // Detect head position
     const headPosition = this.detectHeadPosition(faceRegion);
@@ -135,8 +168,8 @@ export class AdvancedFocusDetector {
     // Calculate focus score
     const focusScore = this.calculateFocusScore(eyeMetrics, headPosition);
 
-    // Smooth the score
-    const smoothedScore = this.smoothFocusScore(focusScore);
+    // Apply exponential smoothing
+    const smoothedScore = this.exponentialSmoothing(focusScore);
 
     return {
       focusScore: smoothedScore,
@@ -300,24 +333,50 @@ export class AdvancedFocusDetector {
     return Math.min(100, eyeScore + gazeScore + tensionScore + headScore + blinkScore);
   }
 
-  private smoothFocusScore(score: number): number {
-    this.focusScoreHistory.push(score);
-    if (this.focusScoreHistory.length > this.maxHistoryLength) {
-      this.focusScoreHistory.shift();
-    }
+  /**
+   * Exponential smoothing for focus score
+   * Eliminates jitter while maintaining responsiveness
+   */
+  private exponentialSmoothing(rawScore: number): number {
+    // Apply exponential smoothing: smoothed = α * raw + (1 - α) * previous
+    this.smoothedFocusScore =
+      this.smoothingFactor * rawScore + (1 - this.smoothingFactor) * this.smoothedFocusScore;
 
-    const average =
-      this.focusScoreHistory.reduce((a, b) => a + b, 0) / this.focusScoreHistory.length;
-    return Math.round(average);
+    return Math.round(this.smoothedFocusScore);
+  }
+
+  /**
+   * Improved blink detection with temporal tracking
+   * Detects eye closure patterns to identify actual blinks
+   */
+  private detectBlinks(eyeOpenness: number) {
+    const now = Date.now();
+
+    // Check if eyes are closed (below threshold)
+    if (eyeOpenness < this.blinkThreshold) {
+      this.eyeClosureFrames++;
+    } else {
+      // Eyes opened - check if we had a valid blink
+      if (
+        this.eyeClosureFrames >= this.minBlinkFrames &&
+        this.eyeClosureFrames <= this.maxBlinkFrames &&
+        now - this.lastBlinkTime > this.blinkCooldown
+      ) {
+        this.blinkCount++;
+        this.lastBlinkTime = now;
+      }
+      this.eyeClosureFrames = 0;
+    }
   }
 
   private getBlinkRate(): number {
     const now = Date.now();
+    // Reset blink count if window has passed
     if (now - this.lastBlinkTime > this.blinkWindow) {
       this.blinkCount = 0;
-      this.lastBlinkTime = now;
     }
-    return (this.blinkCount / this.blinkWindow) * 60000; // blinks per minute
+    // Return blinks per minute
+    return (this.blinkCount / this.blinkWindow) * 60000;
   }
 
   private notifyListeners(metrics: FocusMetrics) {
