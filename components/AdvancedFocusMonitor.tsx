@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Card } from '@/components/ui/card';
-import { Eye, Heart, Zap, Brain } from 'lucide-react';
+import { Eye, Heart, Zap, Brain, Pulse } from 'lucide-react';
 import { type FocusMetrics } from '@/lib/advancedFocusDetector';
 
 interface AdvancedFocusMonitorProps {
@@ -92,7 +92,7 @@ export function AdvancedFocusMonitor({ metrics, isActive }: AdvancedFocusMonitor
       </motion.div>
 
       {/* Detailed Metrics Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
         {/* Eye Openness */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
@@ -159,6 +159,42 @@ export function AdvancedFocusMonitor({ metrics, isActive }: AdvancedFocusMonitor
             <p className="text-2xl font-bold text-yellow-300">{Math.round(metrics.facialTension * 100)}%</p>
             <p className="text-xs text-slate-500 mt-1">
               {metrics.facialTension > 0.6 ? '😤 High' : metrics.facialTension > 0.3 ? '😐 Normal' : '😌 Relaxed'}
+            </p>
+          </Card>
+        </motion.div>
+
+        {/* Heart Rate */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+        >
+          <Card className="p-4 bg-slate-900/50 border-slate-700 hover:border-teal-500/50 transition-colors">
+            <div className="flex items-center gap-2 mb-2">
+              <Pulse className="w-4 h-4 text-rose-400" />
+              <p className="text-xs text-slate-400">Heart Rate</p>
+            </div>
+            <p className="text-2xl font-bold text-rose-300">{metrics.heartRate > 0 ? metrics.heartRate : '—'}</p>
+            <p className="text-xs text-slate-500 mt-1">
+              {metrics.heartRate > 0 ? (metrics.heartRate < 60 ? '😌 Calm' : metrics.heartRate < 100 ? '😐 Normal' : '⚡ Active') : 'Detecting...'}
+            </p>
+          </Card>
+        </motion.div>
+
+        {/* Heart Rate Variability */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6 }}
+        >
+          <Card className="p-4 bg-slate-900/50 border-slate-700 hover:border-teal-500/50 transition-colors">
+            <div className="flex items-center gap-2 mb-2">
+              <Pulse className="w-4 h-4 text-pink-400" />
+              <p className="text-xs text-slate-400">HRV</p>
+            </div>
+            <p className="text-2xl font-bold text-pink-300">{Math.round(metrics.heartRateVariability * 100)}%</p>
+            <p className="text-xs text-slate-500 mt-1">
+              {metrics.heartRateVariability > 0.6 ? '🧘 Relaxed' : metrics.heartRateVariability > 0.3 ? '😐 Normal' : '😰 Stressed'}
             </p>
           </Card>
         </motion.div>

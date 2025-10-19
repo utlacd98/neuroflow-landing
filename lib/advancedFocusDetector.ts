@@ -16,6 +16,8 @@ export interface FocusMetrics {
   blinkRate: number; // blinks per minute
   facialTension: number; // 0-1 (cognitive effort)
   headMovement: number; // 0-1 (stillness)
+  heartRate: number; // beats per minute (0 if not detected)
+  heartRateVariability: number; // 0-1 (stress indicator, lower = more stressed)
   timestamp: number;
 }
 
@@ -59,6 +61,16 @@ export class AdvancedFocusDetector {
   private analysisInterval = 2; // Analyze every 2nd frame (30 FPS → 15 FPS analysis)
   private cachedFaceRegion: { x: number; y: number; width: number; height: number } | null = null;
   private faceRegionUpdateInterval = 10; // Update face region every 10 frames
+
+  // Heart rate detection (PPG - Photoplethysmography)
+  private heartRateBuffer: number[] = []; // Store pixel intensity values
+  private heartRateBufferSize = 300; // ~10 seconds at 30 FPS
+  private heartRateHistory: number[] = []; // Store detected heart rates
+  private maxHeartRateHistoryLength = 10;
+  private lastHeartRateTime = 0;
+  private heartRateUpdateInterval = 1000; // Update every 1 second
+  private heartRateVariability = 0.5; // 0-1 (lower = more stressed)
+  private lastHeartRate = 0;
 
   async initialize(): Promise<boolean> {
     try {
@@ -182,6 +194,9 @@ export class AdvancedFocusDetector {
     // Apply exponential smoothing
     const smoothedScore = this.exponentialSmoothing(focusScore);
 
+    // Detect heart rate from facial color changes
+    this.detectHeartRate(data, width, height, faceRegion);
+
     return {
       focusScore: smoothedScore,
       eyeOpenness: eyeMetrics.eyeOpenness,
@@ -189,6 +204,8 @@ export class AdvancedFocusDetector {
       blinkRate: this.getBlinkRate(),
       facialTension: eyeMetrics.facialTension,
       headMovement: 1 - (this.headMovementSum / 100), // Inverted: less movement = more focus
+      heartRate: this.lastHeartRate,
+      heartRateVariability: this.heartRateVariability,
       timestamp: Date.now(),
     };
   }
@@ -409,6 +426,141 @@ export class AdvancedFocusDetector {
 
     // Return blinks per minute (scale from 60-second window)
     return blinkCount;
+  }
+
+  /**
+   * Detect heart rate using PPG (Photoplethysmography)
+   * Analyzes color changes in facial skin to detect blood flow
+   */
+  private detectHeartRate(
+    data: Uint8ClampedArray,
+    width: number,
+    height: number,
+    faceRegion: { x: number; y: number; width: number; height: number }
+  ) {
+    const now = Date.now();
+
+    // Only update heart rate every 1 second
+    if (now - this.lastHeartRateTime < this.heartRateUpdateInterval) {
+      return;
+    }
+
+    // Calculate average green channel intensity in face region (most sensitive to blood flow)
+    let greenSum = 0;
+    let pixelCount = 0;
+
+    const startX = Math.floor(faceRegion.x);
+    const startY = Math.floor(faceRegion.y);
+    const endX = Math.floor(faceRegion.x + faceRegion.width);
+    const endY = Math.floor(faceRegion.y + faceRegion.height);
+
+    for (let y = startY; y < endY; y += 2) {
+      for (let x = startX; x < endX; x += 2) {
+        const idx = (y * width + x) * 4;
+        greenSum += data[idx + 1]; // Green channel
+        pixelCount++;
+      }
+    }
+
+    const avgGreen = pixelCount > 0 ? greenSum / pixelCount : 128;
+
+    // Add to buffer
+    this.heartRateBuffer.push(avgGreen);
+    if (this.heartRateBuffer.length > this.heartRateBufferSize) {
+      this.heartRateBuffer.shift();
+    }
+
+    // Calculate heart rate from buffer
+    if (this.heartRateBuffer.length > 100) {
+      const heartRate = this.calculateHeartRateFromBuffer();
+      if (heartRate > 40 && heartRate < 200) {
+        // Valid heart rate range
+        this.heartRateHistory.push(heartRate);
+        if (this.heartRateHistory.length > this.maxHeartRateHistoryLength) {
+          this.heartRateHistory.shift();
+        }
+
+        // Calculate average heart rate
+        const avgHeartRate = this.heartRateHistory.reduce((a, b) => a + b) / this.heartRateHistory.length;
+        this.lastHeartRate = Math.round(avgHeartRate);
+
+        // Calculate heart rate variability (lower = more stressed)
+        this.heartRateVariability = this.calculateHeartRateVariability();
+
+        // Debug logging
+        if (this.frameCount % 60 === 0) {
+          console.log(`❤️ Heart Rate: ${this.lastHeartRate} BPM, HRV: ${this.heartRateVariability.toFixed(2)}`);
+        }
+      }
+    }
+
+    this.lastHeartRateTime = now;
+  }
+
+  /**
+   * Calculate heart rate from PPG signal using FFT-like peak detection
+   */
+  private calculateHeartRateFromBuffer(): number {
+    if (this.heartRateBuffer.length < 100) return 0;
+
+    // Simple peak detection: find peaks in the signal
+    const peaks: number[] = [];
+    const threshold = this.calculateBufferMean() + this.calculateBufferStdDev() * 0.5;
+
+    for (let i = 1; i < this.heartRateBuffer.length - 1; i++) {
+      if (
+        this.heartRateBuffer[i] > threshold &&
+        this.heartRateBuffer[i] > this.heartRateBuffer[i - 1] &&
+        this.heartRateBuffer[i] > this.heartRateBuffer[i + 1]
+      ) {
+        peaks.push(i);
+      }
+    }
+
+    // Calculate BPM from peak intervals
+    if (peaks.length > 1) {
+      let totalInterval = 0;
+      for (let i = 1; i < peaks.length; i++) {
+        totalInterval += peaks[i] - peaks[i - 1];
+      }
+      const avgInterval = totalInterval / (peaks.length - 1);
+      // Convert frame interval to BPM (assuming 30 FPS)
+      const bpm = (30 / avgInterval) * 60;
+      return bpm;
+    }
+
+    return 0;
+  }
+
+  private calculateBufferMean(): number {
+    if (this.heartRateBuffer.length === 0) return 0;
+    return this.heartRateBuffer.reduce((a, b) => a + b) / this.heartRateBuffer.length;
+  }
+
+  private calculateBufferStdDev(): number {
+    if (this.heartRateBuffer.length === 0) return 0;
+    const mean = this.calculateBufferMean();
+    const variance = this.heartRateBuffer.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / this.heartRateBuffer.length;
+    return Math.sqrt(variance);
+  }
+
+  /**
+   * Calculate heart rate variability (HRV)
+   * Lower HRV indicates higher stress, higher HRV indicates relaxation
+   */
+  private calculateHeartRateVariability(): number {
+    if (this.heartRateHistory.length < 2) return 0.5;
+
+    // Calculate standard deviation of heart rates
+    const mean = this.heartRateHistory.reduce((a, b) => a + b) / this.heartRateHistory.length;
+    const variance = this.heartRateHistory.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / this.heartRateHistory.length;
+    const stdDev = Math.sqrt(variance);
+
+    // Normalize to 0-1 scale (higher stdDev = higher HRV = more relaxed)
+    // Typical HRV stdDev ranges from 5-50 ms
+    const normalizedHRV = Math.min(1, stdDev / 50);
+
+    return normalizedHRV;
   }
 
   private notifyListeners(metrics: FocusMetrics) {
