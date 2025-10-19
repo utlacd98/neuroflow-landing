@@ -64,13 +64,14 @@ export class AdvancedFocusDetector {
 
   // Heart rate detection (PPG - Photoplethysmography)
   private heartRateBuffer: number[] = []; // Store pixel intensity values
-  private heartRateBufferSize = 300; // ~10 seconds at 30 FPS
+  private heartRateBufferSize = 150; // ~5 seconds at 30 FPS (faster detection)
   private heartRateHistory: number[] = []; // Store detected heart rates
-  private maxHeartRateHistoryLength = 10;
+  private maxHeartRateHistoryLength = 5; // Reduced for faster updates
   private lastHeartRateTime = 0;
-  private heartRateUpdateInterval = 1000; // Update every 1 second
+  private heartRateUpdateInterval = 500; // Update every 0.5 seconds (faster)
   private heartRateVariability = 0.5; // 0-1 (lower = more stressed)
   private lastHeartRate = 0;
+  private heartRateDetectionStarted = false;
 
   async initialize(): Promise<boolean> {
     try {
@@ -438,15 +439,10 @@ export class AdvancedFocusDetector {
     height: number,
     faceRegion: { x: number; y: number; width: number; height: number }
   ) {
-    const now = Date.now();
-
-    // Only update heart rate every 1 second
-    if (now - this.lastHeartRateTime < this.heartRateUpdateInterval) {
-      return;
-    }
-
     // Calculate average green channel intensity in face region (most sensitive to blood flow)
     let greenSum = 0;
+    let redSum = 0;
+    let blueSum = 0;
     let pixelCount = 0;
 
     const startX = Math.floor(faceRegion.x);
@@ -454,25 +450,39 @@ export class AdvancedFocusDetector {
     const endX = Math.floor(faceRegion.x + faceRegion.width);
     const endY = Math.floor(faceRegion.y + faceRegion.height);
 
-    for (let y = startY; y < endY; y += 2) {
-      for (let x = startX; x < endX; x += 2) {
+    // Sample every pixel (not every 2nd) for better accuracy
+    for (let y = startY; y < endY; y++) {
+      for (let x = startX; x < endX; x++) {
         const idx = (y * width + x) * 4;
-        greenSum += data[idx + 1]; // Green channel
+        redSum += data[idx];
+        greenSum += data[idx + 1]; // Green channel - most sensitive
+        blueSum += data[idx + 2];
         pixelCount++;
       }
     }
 
-    const avgGreen = pixelCount > 0 ? greenSum / pixelCount : 128;
+    if (pixelCount === 0) return;
+
+    // Use normalized green channel (more robust)
+    const avgRed = redSum / pixelCount;
+    const avgGreen = greenSum / pixelCount;
+    const avgBlue = blueSum / pixelCount;
+
+    // Normalize: (G - R) / (G + R) - this is more stable than raw green
+    const normalizedSignal = (avgGreen - avgRed) / (avgGreen + avgRed + 1);
 
     // Add to buffer
-    this.heartRateBuffer.push(avgGreen);
+    this.heartRateBuffer.push(normalizedSignal);
     if (this.heartRateBuffer.length > this.heartRateBufferSize) {
       this.heartRateBuffer.shift();
     }
 
-    // Calculate heart rate from buffer
-    if (this.heartRateBuffer.length > 100) {
+    const now = Date.now();
+
+    // Calculate heart rate from buffer more frequently
+    if (this.heartRateBuffer.length > 50 && now - this.lastHeartRateTime > this.heartRateUpdateInterval) {
       const heartRate = this.calculateHeartRateFromBuffer();
+
       if (heartRate > 40 && heartRate < 200) {
         // Valid heart rate range
         this.heartRateHistory.push(heartRate);
@@ -487,61 +497,105 @@ export class AdvancedFocusDetector {
         // Calculate heart rate variability (lower = more stressed)
         this.heartRateVariability = this.calculateHeartRateVariability();
 
+        // Mark detection as started
+        if (!this.heartRateDetectionStarted) {
+          this.heartRateDetectionStarted = true;
+          console.log(`✅ Heart rate detection started! BPM: ${this.lastHeartRate}`);
+        }
+
         // Debug logging
-        if (this.frameCount % 60 === 0) {
-          console.log(`❤️ Heart Rate: ${this.lastHeartRate} BPM, HRV: ${this.heartRateVariability.toFixed(2)}`);
+        if (this.frameCount % 30 === 0) {
+          console.log(`❤️ Heart Rate: ${this.lastHeartRate} BPM, HRV: ${this.heartRateVariability.toFixed(2)}, Buffer: ${this.heartRateBuffer.length}`);
+        }
+      }
+
+      this.lastHeartRateTime = now;
+    }
+  }
+
+  /**
+   * Calculate heart rate from PPG signal using improved peak detection
+   */
+  private calculateHeartRateFromBuffer(): number {
+    if (this.heartRateBuffer.length < 50) return 0;
+
+    // Apply smoothing to reduce noise
+    const smoothed = this.smoothSignal(this.heartRateBuffer);
+
+    // Find peaks using adaptive threshold
+    const mean = this.calculateArrayMean(smoothed);
+    const stdDev = this.calculateArrayStdDev(smoothed);
+    const threshold = mean + stdDev * 0.3; // Lower threshold for better detection
+
+    const peaks: number[] = [];
+
+    for (let i = 1; i < smoothed.length - 1; i++) {
+      if (
+        smoothed[i] > threshold &&
+        smoothed[i] > smoothed[i - 1] &&
+        smoothed[i] > smoothed[i + 1]
+      ) {
+        // Avoid detecting multiple peaks too close together
+        if (peaks.length === 0 || i - peaks[peaks.length - 1] > 5) {
+          peaks.push(i);
         }
       }
     }
 
-    this.lastHeartRateTime = now;
-  }
-
-  /**
-   * Calculate heart rate from PPG signal using FFT-like peak detection
-   */
-  private calculateHeartRateFromBuffer(): number {
-    if (this.heartRateBuffer.length < 100) return 0;
-
-    // Simple peak detection: find peaks in the signal
-    const peaks: number[] = [];
-    const threshold = this.calculateBufferMean() + this.calculateBufferStdDev() * 0.5;
-
-    for (let i = 1; i < this.heartRateBuffer.length - 1; i++) {
-      if (
-        this.heartRateBuffer[i] > threshold &&
-        this.heartRateBuffer[i] > this.heartRateBuffer[i - 1] &&
-        this.heartRateBuffer[i] > this.heartRateBuffer[i + 1]
-      ) {
-        peaks.push(i);
-      }
-    }
-
     // Calculate BPM from peak intervals
-    if (peaks.length > 1) {
+    if (peaks.length > 2) {
       let totalInterval = 0;
       for (let i = 1; i < peaks.length; i++) {
         totalInterval += peaks[i] - peaks[i - 1];
       }
       const avgInterval = totalInterval / (peaks.length - 1);
+
       // Convert frame interval to BPM (assuming 30 FPS)
+      // BPM = (frames per beat) / (frames per second) * 60
       const bpm = (30 / avgInterval) * 60;
-      return bpm;
+
+      // Clamp to reasonable range
+      return Math.max(40, Math.min(200, bpm));
     }
 
     return 0;
   }
 
+  /**
+   * Simple moving average smoothing
+   */
+  private smoothSignal(signal: number[], windowSize: number = 3): number[] {
+    const smoothed: number[] = [];
+    for (let i = 0; i < signal.length; i++) {
+      let sum = 0;
+      let count = 0;
+      for (let j = Math.max(0, i - windowSize); j <= Math.min(signal.length - 1, i + windowSize); j++) {
+        sum += signal[j];
+        count++;
+      }
+      smoothed.push(sum / count);
+    }
+    return smoothed;
+  }
+
+  private calculateArrayMean(arr: number[]): number {
+    if (arr.length === 0) return 0;
+    return arr.reduce((a, b) => a + b) / arr.length;
+  }
+
+  private calculateArrayStdDev(arr: number[]): number {
+    if (arr.length === 0) return 0;
+    const mean = this.calculateArrayMean(arr);
+    const variance = arr.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / arr.length;
+    return Math.sqrt(variance);
+  }
+
   private calculateBufferMean(): number {
-    if (this.heartRateBuffer.length === 0) return 0;
-    return this.heartRateBuffer.reduce((a, b) => a + b) / this.heartRateBuffer.length;
+    return this.calculateArrayMean(this.heartRateBuffer);
   }
 
   private calculateBufferStdDev(): number {
-    if (this.heartRateBuffer.length === 0) return 0;
-    const mean = this.calculateBufferMean();
-    const variance = this.heartRateBuffer.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / this.heartRateBuffer.length;
-    return Math.sqrt(variance);
+    return this.calculateArrayStdDev(this.heartRateBuffer);
   }
 
   /**
