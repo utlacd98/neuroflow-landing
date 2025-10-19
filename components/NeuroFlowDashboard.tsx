@@ -14,8 +14,11 @@ import { aiFeedbackGenerator } from '@/lib/aiFeedback';
 import { FocusWaveChart } from '@/components/FocusWaveChart';
 import { PlaylistSelector } from '@/components/PlaylistSelector';
 import { BrainWaveVisualizer } from '@/components/BrainWaveVisualizer';
+import { AdvancedFocusMonitor } from '@/components/AdvancedFocusMonitor';
 import { playlistLibrary, type Playlist } from '@/lib/playlistLibrary';
 import { cameraMotionDetector, type MotionData } from '@/lib/cameraMotionDetector';
+import { advancedFocusDetector, type FocusMetrics } from '@/lib/advancedFocusDetector';
+import { adaptiveFrequencyModulator } from '@/lib/adaptiveFrequencyModulator';
 
 interface ChartDataPoint {
   time: string;
@@ -51,6 +54,8 @@ export default function FocusyncDashboard() {
   const [frequency, setFrequency] = useState(40);
   const [currentPlaylist, setCurrentPlaylist] = useState<Playlist | null>(null);
   const [showPlaylistSelector, setShowPlaylistSelector] = useState(false);
+  const [focusMetrics, setFocusMetrics] = useState<FocusMetrics | null>(null);
+  const [advancedCameraActive, setAdvancedCameraActive] = useState(false);
 
   // Initialize chart data
   useEffect(() => {
@@ -93,43 +98,56 @@ export default function FocusyncDashboard() {
     });
   }, [isPlaying]);
 
-  // Initialize camera motion detection
+  // Initialize advanced focus detection
   useEffect(() => {
-    const initCamera = async () => {
+    const initAdvancedCamera = async () => {
       try {
-        const success = await cameraMotionDetector.initialize();
+        // Initialize adaptive frequency modulator
+        await adaptiveFrequencyModulator.initialize();
+
+        // Initialize advanced focus detector
+        const success = await advancedFocusDetector.initialize();
         if (success) {
+          setAdvancedCameraActive(true);
           setCameraActive(true);
 
-          // Listen for motion data
-          cameraMotionDetector.onMotionDetected((motionData: MotionData) => {
-            // Update frequency based on motion
-            const newFrequency = 10 + motionData.movementIntensity * 0.3; // 10-40 Hz
-            setFrequency(newFrequency);
+          // Listen for focus metrics
+          advancedFocusDetector.onFocusMetricsChange((metrics: FocusMetrics) => {
+            setFocusMetrics(metrics);
 
-            // Update focus level based on motion
+            // Update frequency based on focus score
+            setFrequency(10 + (metrics.focusScore / 100) * 30); // 10-40 Hz
+
+            // Update adaptive audio
+            if (isPlaying) {
+              adaptiveFrequencyModulator.updateFrequency(metrics.focusScore, volume);
+            }
+
+            // Update focus level
             setMetrics(prev => ({
               ...prev,
-              focusLevel: Math.min(1, prev.focusLevel + motionData.motionLevel * 0.05),
+              focusLevel: metrics.focusScore / 100,
             }));
           });
         } else {
+          setAdvancedCameraActive(false);
           setCameraActive(false);
         }
       } catch (error) {
-        console.error('Camera initialization error:', error);
+        console.error('Advanced camera initialization error:', error);
+        setAdvancedCameraActive(false);
         setCameraActive(false);
       }
     };
 
-    initCamera();
+    initAdvancedCamera();
 
     return () => {
-      if (cameraMotionDetector.isActive()) {
-        cameraMotionDetector.stop();
+      if (advancedFocusDetector.isActive()) {
+        advancedFocusDetector.stop();
       }
     };
-  }, []);
+  }, [isPlaying, volume]);
 
   // Handle playlist selection
   const handlePlaylistSelect = (playlist: Playlist) => {
@@ -376,6 +394,13 @@ export default function FocusyncDashboard() {
                 />
               </TabsContent>
             </Tabs>
+          </motion.div>
+        )}
+
+        {/* Advanced Focus Monitor */}
+        {isPlaying && advancedCameraActive && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="mb-8">
+            <AdvancedFocusMonitor metrics={focusMetrics} isActive={advancedCameraActive} />
           </motion.div>
         )}
 
