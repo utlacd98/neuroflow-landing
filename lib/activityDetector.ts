@@ -54,6 +54,9 @@ export class ActivityDetector {
     document.addEventListener('keydown', () => this.onKeyPress());
     document.addEventListener('keyup', () => this.onKeyUp());
     document.addEventListener('mousemove', () => this.onActivity());
+    document.addEventListener('touchstart', () => this.onActivity());
+    document.addEventListener('touchmove', () => this.onActivity());
+    document.addEventListener('click', () => this.onKeyPress());
   }
 
   private onKeyPress() {
@@ -67,8 +70,8 @@ export class ActivityDetector {
       clearTimeout(this.idleTimer);
     }
 
-    // Increase focus level when typing
-    this.focusLevel = Math.min(1, this.focusLevel + 0.1);
+    // Increase focus level more aggressively when typing
+    this.focusLevel = Math.min(1, this.focusLevel + 0.15);
 
     this.sessionData.activities.push({
       timestamp: now,

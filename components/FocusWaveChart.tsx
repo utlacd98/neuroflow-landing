@@ -58,25 +58,33 @@ export function FocusWaveChart({
     return points;
   }
 
-  // Update data when live mode is active
+  // Update data when live mode is active - use real metrics
   useEffect(() => {
     if (!isLive) return;
 
     const interval = setInterval(() => {
       setData((prevData) => {
+        // Import activity detector to get real metrics
+        const { activityDetector } = require('@/lib/activityDetector');
+        const metrics = activityDetector.getMetrics();
+
+        // Convert metrics to chart values
+        const focusValue = Math.round(metrics.focusLevel * 100);
+        const calmValue = Math.round((1 - metrics.focusLevel) * 100);
+
         const newPoint: ChartDataPoint = {
           time: new Date().toLocaleTimeString('en-US', {
             hour: '2-digit',
             minute: '2-digit',
           }),
-          focus: Math.max(20, Math.min(100, 50 + Math.random() * 50)),
-          calm: Math.max(15, Math.min(95, 40 + Math.random() * 50)),
+          focus: Math.max(20, Math.min(100, focusValue + (metrics.typingSpeed / 100) * 20)),
+          calm: Math.max(15, Math.min(95, calmValue)),
         };
 
         // Keep last 24 points
         return [...prevData.slice(-23), newPoint];
       });
-    }, 2000);
+    }, 1000);
 
     return () => clearInterval(interval);
   }, [isLive]);

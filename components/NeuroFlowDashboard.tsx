@@ -15,6 +15,7 @@ import { FocusWaveChart } from '@/components/FocusWaveChart';
 import { PlaylistSelector } from '@/components/PlaylistSelector';
 import { BrainWaveVisualizer } from '@/components/BrainWaveVisualizer';
 import { playlistLibrary, type Playlist } from '@/lib/playlistLibrary';
+import { cameraMotionDetector, type MotionData } from '@/lib/cameraMotionDetector';
 
 interface ChartDataPoint {
   time: string;
@@ -92,36 +93,42 @@ export default function FocusyncDashboard() {
     });
   }, [isPlaying]);
 
-  // Detect camera access
+  // Initialize camera motion detection
   useEffect(() => {
-    const detectCamera = async () => {
+    const initCamera = async () => {
       try {
-        // First check if mediaDevices is available
-        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-          console.log('MediaDevices API not available');
-          return;
+        const success = await cameraMotionDetector.initialize();
+        if (success) {
+          setCameraActive(true);
+
+          // Listen for motion data
+          cameraMotionDetector.onMotionDetected((motionData: MotionData) => {
+            // Update frequency based on motion
+            const newFrequency = 10 + motionData.movementIntensity * 0.3; // 10-40 Hz
+            setFrequency(newFrequency);
+
+            // Update focus level based on motion
+            setMetrics(prev => ({
+              ...prev,
+              focusLevel: Math.min(1, prev.focusLevel + motionData.motionLevel * 0.05),
+            }));
+          });
+        } else {
+          setCameraActive(false);
         }
-
-        // Try to get camera permission
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user' },
-          audio: false
-        });
-
-        // If we got here, camera is available
-        setCameraActive(true);
-        setFrequency(40); // Gamma waves for peak focus
-
-        // Stop the stream immediately
-        stream.getTracks().forEach(track => track.stop());
       } catch (error) {
-        // Camera not available or permission denied - that's ok
-        console.log('Camera not available or permission denied');
+        console.error('Camera initialization error:', error);
         setCameraActive(false);
       }
     };
 
-    detectCamera();
+    initCamera();
+
+    return () => {
+      if (cameraMotionDetector.isActive()) {
+        cameraMotionDetector.stop();
+      }
+    };
   }, []);
 
   // Handle playlist selection
