@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Card } from '@/components/ui/card';
-import { Eye, Heart, Zap, Brain, Pulse } from 'lucide-react';
+import { Eye, Heart, Zap, Brain, Activity } from 'lucide-react';
 import { type FocusMetrics } from '@/lib/advancedFocusDetector';
 
 interface AdvancedFocusMonitorProps {
@@ -171,7 +171,7 @@ export function AdvancedFocusMonitor({ metrics, isActive }: AdvancedFocusMonitor
         >
           <Card className="p-4 bg-slate-900/50 border-slate-700 hover:border-teal-500/50 transition-colors">
             <div className="flex items-center gap-2 mb-2">
-              <Pulse className="w-4 h-4 text-rose-400" />
+              <Activity className="w-4 h-4 text-rose-400" />
               <p className="text-xs text-slate-400">Heart Rate</p>
             </div>
             <p className="text-2xl font-bold text-rose-300">{metrics.heartRate > 0 ? metrics.heartRate : '—'}</p>
@@ -189,7 +189,7 @@ export function AdvancedFocusMonitor({ metrics, isActive }: AdvancedFocusMonitor
         >
           <Card className="p-4 bg-slate-900/50 border-slate-700 hover:border-teal-500/50 transition-colors">
             <div className="flex items-center gap-2 mb-2">
-              <Pulse className="w-4 h-4 text-pink-400" />
+              <Heart className="w-4 h-4 text-pink-400" />
               <p className="text-xs text-slate-400">HRV</p>
             </div>
             <p className="text-2xl font-bold text-pink-300">{Math.round(metrics.heartRateVariability * 100)}%</p>
