@@ -12,6 +12,9 @@ import { activityDetector, type ActivityMetrics } from '@/lib/activityDetector';
 import { SessionStorageManager } from '@/lib/sessionStorage';
 import { aiFeedbackGenerator } from '@/lib/aiFeedback';
 import { FocusWaveChart } from '@/components/FocusWaveChart';
+import { PlaylistSelector } from '@/components/PlaylistSelector';
+import { BrainWaveVisualizer } from '@/components/BrainWaveVisualizer';
+import { playlistLibrary, type Playlist } from '@/lib/playlistLibrary';
 
 interface ChartDataPoint {
   time: string;
@@ -45,6 +48,8 @@ export default function FocusyncDashboard() {
   const [cameraActive, setCameraActive] = useState(false);
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [frequency, setFrequency] = useState(40);
+  const [currentPlaylist, setCurrentPlaylist] = useState<Playlist | null>(null);
+  const [showPlaylistSelector, setShowPlaylistSelector] = useState(false);
 
   // Initialize chart data
   useEffect(() => {
@@ -118,6 +123,25 @@ export default function FocusyncDashboard() {
 
     detectCamera();
   }, []);
+
+  // Handle playlist selection
+  const handlePlaylistSelect = (playlist: Playlist) => {
+    setCurrentPlaylist(playlist);
+    setShowPlaylistSelector(false);
+
+    // Apply playlist audio layers
+    const config: AudioConfig = {
+      baseFrequency: playlist.layers[0]?.frequency || 200,
+      beatFrequency: playlist.layers[1]?.frequency || 40,
+      volume: volume,
+      mode: mode,
+    };
+
+    if (isPlaying) {
+      audioEngine.stop();
+      audioEngine.play(config);
+    }
+  };
 
   const handlePlayPause = async () => {
     if (isPlaying) {
@@ -252,6 +276,18 @@ export default function FocusyncDashboard() {
               </div>
             </div>
 
+            {/* Playlist Selector Button */}
+            <div className="mb-8">
+              <Button
+                onClick={() => setShowPlaylistSelector(!showPlaylistSelector)}
+                variant="outline"
+                className="w-full border-teal-500/30 hover:bg-teal-900/40 py-3"
+              >
+                <Headphones className="w-4 h-4 mr-2" />
+                {currentPlaylist ? `Now: ${currentPlaylist.name}` : 'Select Soundscape'}
+              </Button>
+            </div>
+
             {/* Play/Pause Controls */}
             <div className="flex gap-4">
               <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="flex-1">
@@ -289,15 +325,50 @@ export default function FocusyncDashboard() {
           </Card>
         </motion.div>
 
-        {/* Focus Wave Chart */}
+        {/* Playlist Selector Modal */}
+        {showPlaylistSelector && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15 }}
+            className="mb-8"
+          >
+            <Card className="p-6 bg-slate-900/50 backdrop-blur-sm border-teal-500/20">
+              <PlaylistSelector
+                onPlaylistSelect={handlePlaylistSelect}
+                currentPlaylistId={currentPlaylist?.id}
+              />
+            </Card>
+          </motion.div>
+        )}
+
+        {/* Tabs for Charts and Visualizations */}
         {isPlaying && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="mb-8">
-            <FocusWaveChart
-              data={chartData}
-              isLive={isPlaying}
-              cameraActive={cameraActive}
-              frequency={frequency}
-            />
+            <Tabs defaultValue="focus-wave" className="w-full">
+              <TabsList className="grid w-full grid-cols-2 bg-slate-900/50 border border-teal-500/20">
+                <TabsTrigger value="focus-wave">Focus Wave</TabsTrigger>
+                <TabsTrigger value="brain-waves">Brain Waves</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="focus-wave" className="mt-4">
+                <FocusWaveChart
+                  data={chartData}
+                  isLive={isPlaying}
+                  cameraActive={cameraActive}
+                  frequency={frequency}
+                />
+              </TabsContent>
+
+              <TabsContent value="brain-waves" className="mt-4">
+                <BrainWaveVisualizer
+                  frequency={frequency}
+                  focusLevel={metrics.focusLevel}
+                  typingSpeed={metrics.typingSpeed}
+                  isPlaying={isPlaying}
+                />
+              </TabsContent>
+            </Tabs>
           </motion.div>
         )}
 
