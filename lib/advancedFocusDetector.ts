@@ -34,9 +34,12 @@ export class AdvancedFocusDetector {
   private maxBlinkFrames = 15; // Maximum frames for valid blink
   private lastBlinkTime = 0;
   private blinkCount = 0;
+  private blinkWindowStart = Date.now(); // Track window start time
   private blinkWindow = 60000; // 1 minute
   private blinkCooldown = 200; // ms between blinks
   private eyeOpenHistory: number[] = [];
+  private blinkTimestamps: number[] = []; // Track individual blink times
+  private lastLoggedBlinkRate = 0; // For debug logging
 
   // Exponential smoothing
   private smoothedFocusScore = 50;
@@ -159,6 +162,14 @@ export class AdvancedFocusDetector {
       this.eyeOpenHistory.shift();
     }
 
+    // Debug: Log eye openness periodically
+    if (this.frameCount % 30 === 0) {
+      const avgEyeOpenness = this.eyeOpenHistory.length > 0
+        ? (this.eyeOpenHistory.reduce((a, b) => a + b) / this.eyeOpenHistory.length).toFixed(2)
+        : '0.00';
+      console.log(`👁️ Eye openness: ${eyeMetrics.eyeOpenness.toFixed(2)} (avg: ${avgEyeOpenness}), Threshold: ${this.blinkThreshold}, Closure frames: ${this.eyeClosureFrames}`);
+    }
+
     // Detect blinks
     this.detectBlinks(eyeMetrics.eyeOpenness);
 
@@ -227,7 +238,7 @@ export class AdvancedFocusDetector {
     gazeDirection: 'center' | 'left' | 'right' | 'up' | 'down';
     facialTension: number;
   } {
-    // Detect dark regions (eyes) in face region
+    // Detect dark regions (eyes) in face region - focus on upper half where eyes are
     let darkPixels = 0;
     let totalPixels = 0;
     let darkX = 0;
@@ -236,7 +247,8 @@ export class AdvancedFocusDetector {
     const startX = Math.floor(faceRegion.x);
     const startY = Math.floor(faceRegion.y);
     const endX = Math.floor(faceRegion.x + faceRegion.width);
-    const endY = Math.floor(faceRegion.y + faceRegion.height);
+    // Focus on upper half of face where eyes are
+    const endY = Math.floor(faceRegion.y + faceRegion.height * 0.5);
 
     for (let y = startY; y < endY; y++) {
       for (let x = startX; x < endX; x++) {
@@ -247,7 +259,8 @@ export class AdvancedFocusDetector {
 
         const brightness = (r + g + b) / 3;
 
-        if (brightness < 100) {
+        // More sensitive threshold for detecting closed eyes
+        if (brightness < 120) {
           darkPixels++;
           darkX += x;
           darkY += y;
@@ -256,7 +269,8 @@ export class AdvancedFocusDetector {
       }
     }
 
-    const eyeOpenness = Math.min(1, darkPixels / (totalPixels * 0.3));
+    // Improved eye openness calculation - more sensitive to changes
+    const eyeOpenness = Math.min(1, Math.max(0, (darkPixels / (totalPixels * 0.25)) - 0.2));
     const centerX = faceRegion.x + faceRegion.width / 2;
     const avgDarkX = darkPixels > 0 ? darkX / darkPixels : centerX;
 
@@ -363,7 +377,20 @@ export class AdvancedFocusDetector {
         now - this.lastBlinkTime > this.blinkCooldown
       ) {
         this.blinkCount++;
+        this.blinkTimestamps.push(now);
         this.lastBlinkTime = now;
+
+        // Debug: Log blink detection
+        const blinkRate = this.getBlinkRate();
+        if (Math.abs(blinkRate - this.lastLoggedBlinkRate) > 0.5) {
+          console.log(`🧠 Blink detected! Frames closed: ${this.eyeClosureFrames}, Blink rate: ${blinkRate.toFixed(1)}/min, Total blinks: ${this.blinkTimestamps.length}`);
+          this.lastLoggedBlinkRate = blinkRate;
+        }
+
+        // Keep only blinks within the window
+        this.blinkTimestamps = this.blinkTimestamps.filter(
+          (timestamp) => now - timestamp < this.blinkWindow
+        );
       }
       this.eyeClosureFrames = 0;
     }
@@ -371,12 +398,17 @@ export class AdvancedFocusDetector {
 
   private getBlinkRate(): number {
     const now = Date.now();
-    // Reset blink count if window has passed
-    if (now - this.lastBlinkTime > this.blinkWindow) {
-      this.blinkCount = 0;
-    }
-    // Return blinks per minute
-    return (this.blinkCount / this.blinkWindow) * 60000;
+
+    // Remove old blinks outside the window
+    this.blinkTimestamps = this.blinkTimestamps.filter(
+      (timestamp) => now - timestamp < this.blinkWindow
+    );
+
+    // Calculate blinks per minute based on actual timestamps
+    const blinkCount = this.blinkTimestamps.length;
+
+    // Return blinks per minute (scale from 60-second window)
+    return blinkCount;
   }
 
   private notifyListeners(metrics: FocusMetrics) {
